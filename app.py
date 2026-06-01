@@ -540,8 +540,6 @@ def scan_drugs():
 
     current_medications = request.form.get("currentMedications", "")
     medical_history = request.form.get("medicalHistory", "")
-    investigation_results = request.form.get("investigationResults", "")
-    filename_text = "\n".join(file_info["original_name"] for file_info in saved_files)
 
     has_drug_images = any(file_info.get("category") == "drug-images" for file_info in saved_files)
     ai_note = None
@@ -567,7 +565,7 @@ def scan_drugs():
         ]
 
     drug_candidates = []
-    for name in extracted_names + parse_possible_drug_names(current_medications, extracted_text, filename_text):
+    for name in extracted_names + parse_possible_drug_names(current_medications, extracted_text):
         key = name.lower()
         if key not in {candidate.lower() for candidate in drug_candidates}:
             drug_candidates.append(name)
