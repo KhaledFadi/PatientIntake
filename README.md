@@ -26,6 +26,7 @@ It also includes a local RAG index for clinical books and guidelines using Gemin
 ```text
 .
 |-- app.py
+|-- clinical agent.py   # Clinical Agent orchestration for RAG and medication checks
 |-- index.html
 |-- script.js
 |-- style.css
@@ -137,9 +138,64 @@ GET  /rag/status    RAG index status
 POST /rag/index     Build or refresh the local vector index
 POST /rag/search    Search books and return passages with citations
 POST /rag/context   Return prompt-ready context for a Clinical Agent
+POST /clinical-agent Build a clinician-review packet from RAG plus medication checks
 ```
 
 These routes use the same HTTP Basic Auth password as `/submissions`.
+
+## Clinical Agent
+
+The protected `/clinical-agent` endpoint uses Gemini as the reasoning layer over an evidence packet that combines:
+
+1. Local RAG guideline retrieval from `rag_vectors.db`.
+2. Medication name parsing from supplied medication/history text.
+3. openFDA drug label checks.
+4. Optional DrugBank checks when `DRUGBANK_API_KEY` is configured.
+5. Gemini-generated structured clinical review with citations, medication flags, and safety notes.
+
+The Gemini model defaults to `gemini-2.5-flash` and can be changed with:
+
+```text
+GEMINI_CLINICAL_MODEL=your_model_name
+```
+
+Example request body:
+
+```json
+{
+  "query": "erectile dysfunction initial evaluation and medication safety",
+  "current_medications": "sildenafil, nitroglycerin",
+  "medical_history": "ischemic heart disease",
+  "top_k": 4
+}
+```
+
+You can also pass a saved intake form:
+
+```json
+{
+  "submission_id": 1,
+  "query": "review this case for guideline context and medication safety"
+}
+```
+
+The endpoint supports clinical review only. It does not diagnose, prescribe, or replace clinician judgment.
+
+## Submit Workflow
+
+When a patient submits the main questionnaire, the app now follows the clinical workflow:
+
+1. Save the form to `intake.db`.
+2. Run the Gemini Lifestyle Agent.
+3. If lifestyle is sufficient to explain symptoms, stop and return the lifestyle report.
+4. If lifestyle is not sufficient, run medication checks through openFDA and optional DrugBank.
+5. Retrieve guideline context from the local vector database.
+6. Send medication and RAG evidence to the Gemini Clinical Agent.
+7. Search PubMed for relevant research papers.
+8. Send the Clinical Agent packet and PubMed evidence to the Gemini Research Agent.
+9. Store the workflow result inside the saved submission under `clinical_pipeline`.
+
+The browser submit modal shows a short workflow summary after submission. Full details are saved with the submission record.
 
 ## Medication Scanning
 
@@ -176,6 +232,7 @@ GET  /rag/status    Password-protected RAG index status
 POST /rag/index     Password-protected RAG indexing
 POST /rag/search    Password-protected RAG retrieval
 POST /rag/context   Password-protected Clinical Agent context
+POST /clinical-agent Password-protected RAG plus medication-check agent
 ```
 
 ## Submitted Forms

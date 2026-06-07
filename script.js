@@ -5,10 +5,12 @@ function getCheckedValue(name) {
 
 function isDivorced() { return getCheckedValue("maritalStatus") === "divorced"; }
 function isSmoking()  { return getCheckedValue("smokingStatus") === "current"; }
+function isChoice(type) { return type === "checkbox" || type === "radio"; }
 
+// Purpose: validation rules for required form fields.
 const REQUIRED_FIELDS = [
 
-  /* ── A. Personal Information ── */
+  // Purpose: personal information fields.
   { name: "codeNo",      label: "Code No. / كود المريض",               type: "text"   },
   { name: "fullName",    label: "Full Name / الاسم الكامل",             type: "text"   },
   { name: "age",         label: "Age / السن",                           type: "number", extra: { min: 1, max: 120 } },
@@ -17,7 +19,7 @@ const REQUIRED_FIELDS = [
   { name: "mobile",      label: "Mobile No. / رقم الموبايل",            type: "text"   },
   { name: "email",       label: "Email Address / البريد الإلكتروني",    type: "email"  },
 
-  /* ── B. Marital Status ── */
+  // Purpose: marital and family history fields.
   { name: "maritalStatus",         label: "Marital Status / الحالة الاجتماعية",                                  type: "radio" },
   { name: "durationMarriage",      label: "Duration of Marriage / مدة الزواج",                                   type: "text"  },
   { name: "numberWives",           label: "Number of Wives / عدد الزوجات",                                       type: "text"  },
@@ -28,14 +30,14 @@ const REQUIRED_FIELDS = [
   { name: "contraceptionMethods",  label: "Methods of Contraception / وسائل منع الحمل",                         type: "text"  },
   { name: "divorceRelated",        label: "Divorce related to complaint? / هل الطلاق مرتبط بالشكوى؟",           type: "radio" },
 
-  /* ── C. Allergies ── */
+  // Purpose: allergy fields.
   { name: "drugAllergies",  label: "Drug Allergies / حساسية الأدوية",   type: "text" },
   { name: "otherAllergies", label: "Other Allergies / حساسية أخرى",     type: "text" },
 
-  /* ── D. Referral ── */
+  // Purpose: referral source field.
   { name: "referral", label: "How did you know about us? / كيف تعرفت علينا؟", type: "checkbox" },
 
-  /* ── F. Lifestyle & Habits ── */
+  // Purpose: lifestyle and habit fields.
   { name: "sleepHours",           label: "Average sleep hours / متوسط ساعات النوم",          type: "text"     },
   { name: "sleepType",            label: "Type of sleep / طبيعة النوم",                      type: "radio"    },
   { name: "sleepQuality",         label: "Sleep quality 1-10 / جودة النوم",                  type: "number",   extra: { min: 1, max: 10 } },
@@ -57,7 +59,7 @@ const REQUIRED_FIELDS = [
   { name: "masturbation",         label: "Masturbation / العادة السرية",                     type: "radio"    },
   { name: "partnerDifficultyOnly",label: "Difficulty with partner only? / صعوبة مع الشريك فقط؟", type: "radio" },
 
-  /* ── G. Psychological & Recovery ── */
+  // Purpose: psychological and recovery fields.
   { name: "stressLevel",          label: "Stress level 1-10 / مستوى الضغوط",                type: "number", extra: { min: 1, max: 10 } },
   { name: "anxietyDepression",    label: "Anxiety/Depression diagnosis? / تشخيص قلق أو اكتئاب؟", type: "radio" },
   { name: "relationshipConflict", label: "Major relationship conflict? / خلافات زوجية حادة؟",     type: "radio" },
@@ -69,19 +71,15 @@ const REQUIRED_FIELDS = [
   { name: "libidoScore",          label: "Libido 1-10 / الرغبة الجنسية",                    type: "number", extra: { min: 1, max: 10 } },
   { name: "recoveryScore",        label: "Recovery 1-10 / التعافي البدني",                  type: "number", extra: { min: 1, max: 10 } },
 
-  /* ── H. Primary Complaints ── */
+  // Purpose: primary complaint field.
   { name: "complaints", label: "Primary Complaints / الشكوى الرئيسية", type: "checkbox" },
 ];
 
-/* ─────────────────────────────────────────────
-   State
-───────────────────────────────────────────── */
+// Purpose: remember which fields can show live validation.
 const touched       = new Set();
 let   submitAttempted = false;
 
-/* ─────────────────────────────────────────────
-   DOM helpers
-───────────────────────────────────────────── */
+// Purpose: small DOM helpers used by validation and uploads.
 function getField(name) {
   return document.querySelector(`[name="${name}"]`);
 }
@@ -90,49 +88,28 @@ function getAllFields(name) {
   return Array.from(document.querySelectorAll(`[name="${name}"]`));
 }
 
-/**
- * Returns the element AFTER which (or INSIDE which) the error <p> will be placed.
- *
- * For radio/checkbox groups we want to insert the error after the group container.
- * If that container is inside a .field-wrapper we return the .field-wrapper so
- * the error is appended INSIDE it (keeping everything self-contained).
- */
 function getErrorAnchor(name, type) {
-  if (type === "checkbox" || type === "radio") {
+  if (isChoice(type)) {
     const first = getField(name);
     if (!first) return null;
     const group = first.closest(".grid, .radio-group");
     if (!group) return first.parentElement;
-
-    // If group lives inside a .field-wrapper, return the wrapper
-    const wrapper = group.closest(".field-wrapper");
-    return wrapper || group;
+    return group.closest(".field-wrapper") || group;
   }
   return getField(name) || null;
 }
 
-/* ─────────────────────────────────────────────
-   Render / clear inline error
-───────────────────────────────────────────── */
+// Purpose: render or clear one inline validation error.
 function setError(name, type, message) {
   const anchor = getErrorAnchor(name, type);
   if (!anchor) return;
 
-  /* Visual highlight on inputs */
-  if (type === "checkbox" || type === "radio") {
-    getAllFields(name).forEach(el => el.classList.toggle("input-error", !!message));
-  } else {
-    const el = getField(name);
-    if (el) el.classList.toggle("input-error", !!message);
-  }
+  const fields = isChoice(type) ? getAllFields(name) : [getField(name)].filter(Boolean);
+  fields.forEach(el => el.classList.toggle("input-error", !!message));
 
-  /* Toggle error state on field-wrapper when applicable */
   const isWrapper = anchor.classList.contains("field-wrapper");
-  if (isWrapper) {
-    anchor.classList.toggle("field-wrapper-error", !!message);
-  }
+  if (isWrapper) anchor.classList.toggle("field-wrapper-error", !!message);
 
-  /* Insert / remove error paragraph */
   const errorId = `err-${name}`;
   let errEl = document.getElementById(errorId);
 
@@ -141,14 +118,8 @@ function setError(name, type, message) {
       errEl = document.createElement("p");
       errEl.id        = errorId;
       errEl.className = "field-error";
-
-      if (isWrapper) {
-        // Append INSIDE the wrapper so it stays in-section
-        anchor.appendChild(errEl);
-      } else {
-        // Insert immediately after the group / input
-        anchor.insertAdjacentElement("afterend", errEl);
-      }
+      if (isWrapper) anchor.appendChild(errEl);
+      else anchor.insertAdjacentElement("afterend", errEl);
     }
     errEl.textContent = message;
   } else {
@@ -157,12 +128,8 @@ function setError(name, type, message) {
   }
 }
 
-/* ─────────────────────────────────────────────
-   Validate one rule → error string or ""
-   Respects when() — returns "" if field inactive
-───────────────────────────────────────────── */
+// Purpose: validate one active rule and return its error message.
 function validateRule({ name, label, type, extra, when }) {
-  /* Skip conditional fields that are not currently active */
   if (when && !when()) return "";
 
   if (type === "checkbox") {
@@ -199,9 +166,7 @@ function validateRule({ name, label, type, extra, when }) {
   return "";
 }
 
-/* ─────────────────────────────────────────────
-   Live validation — only for touched fields
-───────────────────────────────────────────── */
+// Purpose: revalidate fields after user interaction.
 function revalidate(name) {
   if (!submitAttempted && !touched.has(name)) return;
   const rule = REQUIRED_FIELDS.find(r => r.name === name);
@@ -209,23 +174,18 @@ function revalidate(name) {
   setError(name, rule.type, validateRule(rule));
 }
 
-/* Re-validate all conditional dependents when a trigger field changes */
 function revalidateConditionals() {
   if (!submitAttempted) return;
-  REQUIRED_FIELDS.filter(r => r.when).forEach(rule => {
-    if (!rule.when()) {
-      setError(rule.name, rule.type, "");
-    } else {
-      setError(rule.name, rule.type, validateRule(rule));
-    }
-  });
+  REQUIRED_FIELDS
+    .filter(rule => rule.when)
+    .forEach(rule => setError(rule.name, rule.type, rule.when() ? validateRule(rule) : ""));
 }
 
-/* Attach event listeners */
+// Purpose: attach live validation listeners to each required field.
 REQUIRED_FIELDS.forEach(rule => {
   const { name, type } = rule;
 
-  if (type === "checkbox" || type === "radio") {
+  if (isChoice(type)) {
     getAllFields(name).forEach(el => {
       el.addEventListener("change", () => {
         touched.add(name);
@@ -251,9 +211,7 @@ REQUIRED_FIELDS.forEach(rule => {
   });
 });
 
-/* ─────────────────────────────────────────────
-   Submit
-───────────────────────────────────────────── */
+// Purpose: gather uploads, scan medication evidence, then submit the form.
 const formElement = document.getElementById("intakeForm");
 formElement.noValidate = true;
 
@@ -534,6 +492,13 @@ investigationFileInput?.addEventListener("change", () => {
 scanDrugsButton?.addEventListener("click", scanDrugUploads);
 updateUploadFileSummary();
 
+function formatPipelineMessage(result) {
+  const submissionId = result?.submission_id || result?.pipeline?.submission_id;
+  return submissionId
+    ? `Form submitted successfully.\n\nSubmission #${submissionId}`
+    : "Form submitted successfully.";
+}
+
 formElement.addEventListener("submit", async function (e) {
   e.preventDefault();
   submitAttempted = true;
@@ -565,7 +530,7 @@ formElement.addEventListener("submit", async function (e) {
       body:    JSON.stringify(data),
     });
     const result = await response.json();
-    showMessage("Submitted / تم الإرسال", result.message);
+    showMessage("Submitted / تم الإرسال", formatPipelineMessage(result));
   } catch {
     showMessage(
       "Submission Error / خطأ في الإرسال",
@@ -574,9 +539,7 @@ formElement.addEventListener("submit", async function (e) {
   }
 });
 
-/* ─────────────────────────────────────────────
-   Utilities
-───────────────────────────────────────────── */
+// Purpose: turn form controls into the JSON payload expected by Flask.
 function buildFormData(form) {
   const data = {};
   new FormData(form).forEach((value, key) => {
@@ -595,14 +558,14 @@ function buildFormData(form) {
     try {
       data[key] = JSON.parse(data[key]);
     } catch {
-      /* Leave unparsed values intact so the form still submits. */
+      // Purpose: leave unparsed values intact so the form still submits.
     }
   });
 
   return data;
 }
 
-/* ── Modal ── */
+// Purpose: simple reusable modal for validation and submission messages.
 let messageDialog = null;
 
 function getMessageDialog() {

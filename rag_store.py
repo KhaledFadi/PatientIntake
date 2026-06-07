@@ -10,9 +10,11 @@ import sys
 import time
 from datetime import datetime
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+
+from agent_utils import load_secret as read_secret, request_json
 
 
+# Purpose: configure local PDF sources, SQLite vector storage, and Gemini embeddings.
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 RAG_SOURCE_DIR = os.environ.get("RAG_SOURCE_DIR", os.path.join(BASE_DIR, "RAG Files"))
 RAG_DB_PATH = os.environ.get("RAG_DB_PATH", os.path.join(BASE_DIR, "rag_vectors.db"))
@@ -29,37 +31,13 @@ def utc_now():
 
 
 def load_secret(name):
-    value = os.environ.get(name)
-    if value:
-        return value.strip()
-
-    secret_path = os.path.join(BASE_DIR, "APIkey")
-    aliases = {
-        "GEMINI_API_KEY": {"GEMINI_API_KEY", "GOOGLE_API_KEY", "GEMINI", "GOOGLE"},
-    }
-
-    try:
-        with open(secret_path, "r", encoding="utf-8") as secret_file:
-            lines = [
-                line.strip()
-                for line in secret_file
-                if line.strip() and not line.lstrip().startswith("#")
-            ]
-    except OSError:
-        return None
-
-    valid_names = aliases.get(name, {name})
-    for line in lines:
-        if "=" not in line:
-            continue
-        key, raw_value = line.split("=", 1)
-        if key.strip().upper() in valid_names:
-            return raw_value.strip().strip("\"'")
-
-    if name == "GEMINI_API_KEY" and len(lines) == 1 and lines[0].startswith("AIza"):
-        return lines[0].strip().strip("\"'")
-
-    return None
+    """Read Gemini credentials from env vars or APIkey."""
+    return read_secret(
+        name,
+        base_dir=BASE_DIR,
+        aliases={"GEMINI_API_KEY", "GOOGLE_API_KEY", "GEMINI", "GOOGLE"},
+        bare_value=lambda line: name == "GEMINI_API_KEY" and line.startswith("AIza"),
+    )
 
 
 def model_resource_name():
@@ -168,21 +146,6 @@ def build_document_chunks(path):
     return chunks, page_count
 
 
-def request_json(url, *, method="POST", headers=None, body=None, timeout=REQUEST_TIMEOUT_SECONDS):
-    request_headers = {"Accept": "application/json"}
-    if headers:
-        request_headers.update(headers)
-
-    data = None
-    if body is not None:
-        data = json.dumps(body).encode("utf-8")
-        request_headers["Content-Type"] = "application/json"
-
-    req = Request(url, data=data, headers=request_headers, method=method)
-    with urlopen(req, timeout=timeout) as response:
-        return json.loads(response.read().decode("utf-8"))
-
-
 def extract_embedding_values(item):
     if isinstance(item.get("values"), list):
         return item["values"]
@@ -192,7 +155,7 @@ def extract_embedding_values(item):
     raise RuntimeError("Gemini embedding response did not include embedding values.")
 
 
-def gemini_embed_texts(texts, *, task_type, title=None, api_key=None):
+def gemini_embed_texts(texts, *, task_type, title=None, api_key=None, output_dim=None):
     if not texts:
         return []
 
@@ -201,11 +164,12 @@ def gemini_embed_texts(texts, *, task_type, title=None, api_key=None):
         raise RuntimeError("GEMINI_API_KEY is not configured in the environment or APIkey file.")
 
     model_name = model_resource_name()
+    embedding_dim = int(output_dim or GEMINI_EMBEDDING_DIM)
     url = f"https://generativelanguage.googleapis.com/v1beta/{model_name}:batchEmbedContents"
     config = {
         "taskType": task_type,
         "autoTruncate": True,
-        "outputDimensionality": GEMINI_EMBEDDING_DIM,
+        "outputDimensionality": embedding_dim,
     }
     if title and task_type == "RETRIEVAL_DOCUMENT":
         config["title"] = title
@@ -226,8 +190,10 @@ def gemini_embed_texts(texts, *, task_type, title=None, api_key=None):
         try:
             payload = request_json(
                 url,
+                method="POST",
                 headers={"x-goog-api-key": api_key},
                 body=body,
+                timeout=REQUEST_TIMEOUT_SECONDS,
             )
             embeddings = payload.get("embeddings") or []
             if len(embeddings) != len(texts):
@@ -257,7 +223,7 @@ def pack_embedding(values):
 
 def unpack_embedding(blob):
     values = array.array("f")
-    values.frombytes(blob)
+    values.frombytes(bytes(blob))
     return values
 
 
@@ -325,6 +291,65 @@ def current_chunk_count(conn, document_id):
     ).fetchone()["count"]
 
 
+def available_embedding_indexes(conn):
+    rows = conn.execute(
+        """
+        SELECT embedding_model, embedding_dim, COUNT(*) AS count
+        FROM rag_chunks
+        GROUP BY embedding_model, embedding_dim
+        ORDER BY embedding_model, embedding_dim
+        """
+    ).fetchall()
+    return [
+        {
+            "embedding_model": row["embedding_model"],
+            "embedding_dim": int(row["embedding_dim"]),
+            "chunks": int(row["count"]),
+        }
+        for row in rows
+    ]
+
+
+def resolve_search_index(conn):
+    active_count = conn.execute(
+        """
+        SELECT COUNT(*) AS count
+        FROM rag_chunks
+        WHERE embedding_model = ?
+          AND embedding_dim = ?
+        """,
+        (GEMINI_EMBEDDING_MODEL, GEMINI_EMBEDDING_DIM),
+    ).fetchone()["count"]
+    if active_count:
+        return GEMINI_EMBEDDING_MODEL, GEMINI_EMBEDDING_DIM
+
+    matching_model_rows = conn.execute(
+        """
+        SELECT embedding_dim, COUNT(*) AS count
+        FROM rag_chunks
+        WHERE embedding_model = ?
+        GROUP BY embedding_dim
+        ORDER BY count DESC, embedding_dim
+        """,
+        (GEMINI_EMBEDDING_MODEL,),
+    ).fetchall()
+    if len(matching_model_rows) == 1:
+        return GEMINI_EMBEDDING_MODEL, int(matching_model_rows[0]["embedding_dim"])
+
+    if matching_model_rows:
+        available = ", ".join(
+            f"{row['embedding_dim']} dims ({row['count']} chunks)"
+            for row in matching_model_rows
+        )
+        raise RuntimeError(
+            f"No indexed chunks found for {GEMINI_EMBEDDING_MODEL} at "
+            f"{GEMINI_EMBEDDING_DIM} dimensions. Available dimensions: {available}. "
+            "Set GEMINI_EMBEDDING_DIM to one of those values or re-index."
+        )
+
+    raise RuntimeError("No indexed RAG chunks found. Run python rag_store.py index first.")
+
+
 def replace_document_chunks(conn, *, document, chunks, embedded_rows, page_count):
     source_path = document["source_path"]
     existing = existing_document(conn, source_path)
@@ -349,19 +374,20 @@ def replace_document_chunks(conn, *, document, chunks, embedded_rows, page_count
             ),
         )
     else:
+        insert_params = (
+            source_path,
+            document["filename"],
+            document["sha256"],
+            document["file_size"],
+            page_count,
+            now,
+        )
         cursor = conn.execute(
             """
             INSERT INTO rag_documents (source_path, filename, sha256, file_size, page_count, indexed_at)
             VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (
-                source_path,
-                document["filename"],
-                document["sha256"],
-                document["file_size"],
-                page_count,
-                now,
-            ),
+            insert_params,
         )
         document_id = cursor.lastrowid
 
@@ -401,16 +427,46 @@ def batch_items(items, batch_size):
         yield items[start:start + batch_size]
 
 
-def index_rag_files(*, source_dir=RAG_SOURCE_DIR, force=False, limit=None):
-    pdf_paths = list_pdf_files(source_dir)
-    if limit is not None:
-        pdf_paths = pdf_paths[:int(limit)]
+def collect_pdf_paths(source_dir, source_paths=None, limit=None):
+    """Resolve all requested PDFs while preserving order and uniqueness."""
+    pdf_paths = []
+    seen_paths = set()
+
+    def add_path(path):
+        normalized = os.path.normcase(os.path.normpath(path))
+        if normalized not in seen_paths:
+            pdf_paths.append(path)
+            seen_paths.add(normalized)
+
+    if source_paths is not None:
+        for source_path in source_paths:
+            candidate_path = (
+                os.path.abspath(source_path)
+                if os.path.isabs(source_path)
+                else os.path.normpath(os.path.join(source_dir, source_path))
+            )
+            if os.path.isdir(candidate_path):
+                for path in list_pdf_files(candidate_path):
+                    add_path(path)
+            elif os.path.isfile(candidate_path):
+                add_path(candidate_path)
+            else:
+                raise RuntimeError(f"Specified path does not exist: {source_path}")
+    else:
+        pdf_paths = list_pdf_files(source_dir)
+    return pdf_paths[:int(limit)] if limit is not None else pdf_paths
+
+
+def index_rag_files(*, source_dir=RAG_SOURCE_DIR, force=False, limit=None, source_paths=None):
+    """Extract, embed, and store PDF chunks in the local vector database."""
+    pdf_paths = collect_pdf_paths(source_dir, source_paths, limit)
     if pdf_paths and not load_secret("GEMINI_API_KEY"):
         raise RuntimeError("GEMINI_API_KEY is not configured in the environment or APIkey file.")
 
     summary = {
         "source_dir": source_dir,
         "database": RAG_DB_PATH,
+        "storage_backend": "sqlite",
         "embedding_model": GEMINI_EMBEDDING_MODEL,
         "embedding_dim": GEMINI_EMBEDDING_DIM,
         "files_found": len(pdf_paths),
@@ -491,6 +547,7 @@ def rag_status():
         return {
             "source_dir": RAG_SOURCE_DIR,
             "database": RAG_DB_PATH,
+            "storage_backend": "sqlite",
             "pdf_files": pdf_count,
             "indexed_documents": 0,
             "indexed_chunks": 0,
@@ -503,16 +560,36 @@ def rag_status():
         documents = conn.execute("SELECT COUNT(*) AS count FROM rag_documents").fetchone()["count"]
         chunks = conn.execute("SELECT COUNT(*) AS count FROM rag_chunks").fetchone()["count"]
         latest = conn.execute("SELECT MAX(indexed_at) AS indexed_at FROM rag_documents").fetchone()["indexed_at"]
+        indexed_embeddings = available_embedding_indexes(conn)
+        active_chunks = conn.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM rag_chunks
+            WHERE embedding_model = ?
+              AND embedding_dim = ?
+            """,
+            (GEMINI_EMBEDDING_MODEL, GEMINI_EMBEDDING_DIM),
+        ).fetchone()["count"]
+        try:
+            search_embedding_model, search_embedding_dim = resolve_search_index(conn)
+        except RuntimeError:
+            search_embedding_model = GEMINI_EMBEDDING_MODEL
+            search_embedding_dim = GEMINI_EMBEDDING_DIM
 
     return {
         "source_dir": RAG_SOURCE_DIR,
         "database": RAG_DB_PATH,
+        "storage_backend": "sqlite",
         "pdf_files": pdf_count,
         "indexed_documents": documents,
         "indexed_chunks": chunks,
+        "active_indexed_chunks": active_chunks,
+        "indexed_embeddings": indexed_embeddings,
         "latest_indexed_at": latest,
         "embedding_model": GEMINI_EMBEDDING_MODEL,
         "embedding_dim": GEMINI_EMBEDDING_DIM,
+        "search_embedding_model": search_embedding_model,
+        "search_embedding_dim": search_embedding_dim,
         "gemini_configured": bool(load_secret("GEMINI_API_KEY")),
     }
 
@@ -532,7 +609,14 @@ def search_rag(query, *, top_k=6, min_score=None):
     if not query:
         raise RuntimeError("Search query is empty.")
 
-    query_embedding = gemini_embed_texts([query], task_type="RETRIEVAL_QUERY")[0]
+    with connect_rag_db() as conn:
+        embedding_model, embedding_dim = resolve_search_index(conn)
+
+    query_embedding = gemini_embed_texts(
+        [query],
+        task_type="RETRIEVAL_QUERY",
+        output_dim=embedding_dim,
+    )[0]
     query_norm = vector_norm(query_embedding)
     if query_norm == 0:
         raise RuntimeError("Gemini returned a zero-length query embedding.")
@@ -548,7 +632,7 @@ def search_rag(query, *, top_k=6, min_score=None):
             WHERE c.embedding_model = ?
               AND c.embedding_dim = ?
             """,
-            (GEMINI_EMBEDDING_MODEL, GEMINI_EMBEDDING_DIM),
+            (embedding_model, embedding_dim),
         ).fetchall()
 
     scored = []
@@ -579,7 +663,8 @@ def search_rag(query, *, top_k=6, min_score=None):
         "top_k": int(top_k),
         "results": results,
         "indexed_chunks_searched": len(rows),
-        "embedding_model": GEMINI_EMBEDDING_MODEL,
+        "embedding_model": embedding_model,
+        "embedding_dim": embedding_dim,
     }
 
 
@@ -609,7 +694,15 @@ def build_clinical_context(query, *, top_k=6, max_passage_chars=1400):
 
 
 def print_json(data):
-    print(json.dumps(data, ensure_ascii=False, indent=2))
+    if hasattr(sys.stdout, "reconfigure"):
+        try:
+            sys.stdout.reconfigure(encoding="utf-8")
+        except Exception:
+            pass
+    try:
+        print(json.dumps(data, ensure_ascii=False, indent=2))
+    except UnicodeEncodeError:
+        print(json.dumps(data, ensure_ascii=True, indent=2))
 
 
 def main(argv=None):
@@ -619,6 +712,11 @@ def main(argv=None):
     index_parser = subparsers.add_parser("index", help="Extract, chunk, embed, and store PDF content.")
     index_parser.add_argument("--force", action="store_true", help="Re-index unchanged PDFs.")
     index_parser.add_argument("--limit", type=int, help="Index only the first N PDFs.")
+    index_parser.add_argument(
+        "--file",
+        action="append",
+        help="Index one or more specific PDF files or directories relative to the RAG source directory.",
+    )
 
     search_parser = subparsers.add_parser("search", help="Search the indexed books.")
     search_parser.add_argument("query", help="Clinical search query.")
