@@ -4,7 +4,8 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import urlopen
 
-from agent_utils import call_gemini_json, compact_text
+from agent_utils import compact_text
+from crewai_agent_tools import run_crewai_json_agent
 
 
 GEMINI_RESEARCH_MODEL = "gemini-2.5-flash"
@@ -42,6 +43,8 @@ Rules:
 - Do not invent articles, PMIDs, citations, contraindications, or guideline statements.
 - Base conclusions only on supplied evidence.
 - Clearly separate medication-label evidence from PubMed/guideline evidence.
+- Only cite PMID values that appear in the supplied pubmed_papers list.
+- If pubmed_papers is empty, do not include PMID citations and state that PubMed retrieval returned no papers.
 - If PubMed retrieval failed or returned no papers, say so in limitations.
 - Do not use Markdown, bold markers, bullets, headings, or asterisks inside string values. Use plain text only.
 """.strip()
@@ -120,18 +123,21 @@ def parse_pubmed_xml(xml_payload, pmids):
 
 
 def call_gemini_research_agent(research_packet, *, api_key, model_name=GEMINI_RESEARCH_MODEL, timeout=60):
-    """Ask Gemini for the final structured research memo."""
-    return call_gemini_json(
-        api_key=api_key,
-        model_name=model_name,
-        system_prompt=RESEARCH_SYSTEM_PROMPT,
-        prompt=(
+    """Run the CrewAI research synthesis agent and parse its JSON memo."""
+    return run_crewai_json_agent(
+        role="Research Synthesis Agent",
+        goal="Synthesize supplied clinical, guideline, medication-label, and PubMed evidence without inventing sources.",
+        backstory=RESEARCH_SYSTEM_PROMPT,
+        task_prompt=(
             "Review this clinical/research packet and produce the required JSON research memo.\n\n"
             f"{json.dumps(research_packet, ensure_ascii=False, indent=2)}"
         ),
+        expected_output="A valid JSON object matching the requested research memo response format.",
+        api_key=api_key,
+        model_name=model_name,
         max_tokens=8192,
         timeout=timeout,
-        label="Gemini research agent",
+        label="CrewAI research agent",
     )
 
 
@@ -160,7 +166,7 @@ def run_research_agent(clinical_packet, *, api_key, model_name=GEMINI_RESEARCH_M
         llm_error = None
     except RuntimeError as exc:
         report = {
-            "research_summary": "Research agent Gemini reasoning was unavailable.",
+            "research_summary": "CrewAI research reasoning was unavailable.",
             "evidence_points": [],
             "clinical_relevance": [],
             "conflicts_or_uncertainties": [],
@@ -172,7 +178,7 @@ def run_research_agent(clinical_packet, *, api_key, model_name=GEMINI_RESEARCH_M
         llm_error = str(exc)
 
     return {
-        "engine": "gemini",
+        "engine": "crewai",
         "model": model_name,
         "pubmed_query": query,
         "research_packet": research_packet,

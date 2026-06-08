@@ -1,6 +1,6 @@
 import json
 
-from agent_utils import call_gemini_json
+from crewai_agent_tools import run_crewai_json_agent
 
 GEMINI_MODEL = "gemini-2.5-flash"
 
@@ -41,19 +41,22 @@ Rules:
 
 
 def _call_gemini(raw_data: dict, api_key: str) -> dict:
-    """Send raw form data to Gemini for lifestyle triage."""
-    return call_gemini_json(
-        api_key=api_key,
-        model_name=GEMINI_MODEL,
-        system_prompt=SYSTEM_PROMPT,
-        prompt=(
+    """Run the CrewAI lifestyle triage agent on raw form data."""
+    return run_crewai_json_agent(
+        role="Lifestyle Triage Agent",
+        goal="Decide whether lifestyle and psychological factors sufficiently explain the submission or the full pipeline should continue.",
+        backstory=SYSTEM_PROMPT,
+        task_prompt=(
             "Here is the raw patient form submission. Review lifestyle and psychological "
             "fields and make your triage decision.\n\n"
             f"{json.dumps(raw_data, ensure_ascii=False, indent=2)}"
         ),
+        expected_output="A valid JSON object matching the requested lifestyle triage response format.",
+        api_key=api_key,
+        model_name=GEMINI_MODEL,
         max_tokens=4096,
         timeout=30,
-        label="Gemini lifestyle agent",
+        label="CrewAI lifestyle agent",
     )
 
 

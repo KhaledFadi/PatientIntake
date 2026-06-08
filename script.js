@@ -214,6 +214,8 @@ REQUIRED_FIELDS.forEach(rule => {
 // Purpose: gather uploads, scan medication evidence, then submit the form.
 const formElement = document.getElementById("intakeForm");
 formElement.noValidate = true;
+const submitButton = document.getElementById("submitButton");
+const submitStatus = document.getElementById("submitStatus");
 
 const drugImageInput = document.getElementById("drugImageFiles");
 const investigationFileInput = document.getElementById("investigationFiles");
@@ -231,6 +233,17 @@ const investigationResultsInput = document.getElementById("investigationResults"
 let previewObjectUrls = [];
 let latestScanSignature = "";
 let latestScanResult = null;
+let isSubmitting = false;
+
+function setSubmitState(active, message = "") {
+  isSubmitting = active;
+  if (submitButton) {
+    submitButton.disabled = active;
+    submitButton.textContent = active ? "Submitting..." : "Submit / إرسال";
+    submitButton.setAttribute("aria-busy", active ? "true" : "false");
+  }
+  if (submitStatus) submitStatus.textContent = message;
+}
 
 function selectedFiles(input) {
   return input?.files ? Array.from(input.files) : [];
@@ -501,6 +514,7 @@ function formatPipelineMessage(result) {
 
 formElement.addEventListener("submit", async function (e) {
   e.preventDefault();
+  if (isSubmitting) return;
   submitAttempted = true;
 
   let firstAnchor = null;
@@ -518,24 +532,27 @@ formElement.addEventListener("submit", async function (e) {
     return;
   }
 
-  const uploadsReady = await ensureUploadFilesAreScanned();
-  if (!uploadsReady) return;
-
-  const data = buildFormData(this);
-
+  setSubmitState(true, "Submitting form and running the clinical workflow. Please wait...");
   try {
+    const uploadsReady = await ensureUploadFilesAreScanned();
+    if (!uploadsReady) return;
+
+    const data = buildFormData(this);
     const response = await fetch("/submit", {
       method:  "POST",
       headers: { "Content-Type": "application/json" },
       body:    JSON.stringify(data),
     });
     const result = await response.json();
+    if (!response.ok) throw new Error(result.error || "Submission failed.");
     showMessage("Submitted / تم الإرسال", formatPipelineMessage(result));
-  } catch {
+  } catch (error) {
     showMessage(
       "Submission Error / خطأ في الإرسال",
-      "Could not submit the form. Please make sure the server is running."
+      `${error.message || "Could not submit the form."}\nPlease make sure the server is running.`
     );
+  } finally {
+    setSubmitState(false);
   }
 });
 

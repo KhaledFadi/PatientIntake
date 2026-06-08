@@ -197,6 +197,19 @@ button[type="submit"] {
 }
 
 button[type="submit"]:hover { background: #163a5f; }
+button[type="submit"]:disabled {
+  background: #8a97a8;
+  cursor: wait;
+  opacity: 0.75;
+}
+
+.submit-status {
+  min-height: 22px;
+  margin: 10px 0 0;
+  color: #4b6075;
+  font-weight: 700;
+  text-align: center;
+}
 
 .secondary-button {
   width: auto;

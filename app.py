@@ -16,6 +16,7 @@ from werkzeug.utils import secure_filename
 from agent_utils import compact_text as first_text
 from agent_utils import load_secret as read_secret
 from agent_utils import parse_json_object, request_json
+from evidence_reviewer_agent import run_evidence_reviewer_agent
 from lifestyle_agent import run_lifestyle_agent
 from rag_store import build_clinical_context, index_rag_files, rag_status, search_rag
 from research_agent import run_research_agent
@@ -69,6 +70,7 @@ DRUGBANK_REGION = os.environ.get("DRUGBANK_REGION", "us")
 GEMINI_API_KEY = load_secret("GEMINI_API_KEY")
 GEMINI_CLINICAL_MODEL = os.environ.get("GEMINI_CLINICAL_MODEL", "gemini-2.5-flash")
 GEMINI_RESEARCH_MODEL = os.environ.get("GEMINI_RESEARCH_MODEL", "gemini-2.5-flash")
+GEMINI_EVIDENCE_REVIEWER_MODEL = os.environ.get("GEMINI_EVIDENCE_REVIEWER_MODEL", "gemini-2.5-flash")
 
 ALLOWED_IMAGE_EXTENSIONS = {"png", "jpg", "jpeg", "webp", "gif", "bmp", "tif", "tiff"}
 ALLOWED_INVESTIGATION_EXTENSIONS = ALLOWED_IMAGE_EXTENSIONS | {"pdf"}
@@ -510,6 +512,7 @@ def run_full_clinical_pipeline(data, submission_id=None):
             "medication_check_and_vector_rag",
             "clinical_agent",
             "research_agent",
+            "evidence_reviewer_agent",
         ],
         "submission_id": submission_id,
         "status": "started",
@@ -556,10 +559,21 @@ def run_full_clinical_pipeline(data, submission_id=None):
         max_pubmed_results=5,
     )
     pipeline["research_agent"] = research_result
+
+    evidence_review_result = run_evidence_reviewer_agent(
+        research_result,
+        api_key=GEMINI_API_KEY,
+        model_name=GEMINI_EVIDENCE_REVIEWER_MODEL,
+    )
+    pipeline["evidence_reviewer_agent"] = evidence_review_result
+
     pipeline.update({
         "status": "completed",
-        "stopped_after": "research_agent",
-        "final_report": research_result.get("report"),
+        "stopped_after": "evidence_reviewer_agent",
+        "final_report": {
+            "research": research_result.get("report"),
+            "evidence_review": evidence_review_result.get("report"),
+        },
     })
     return pipeline
 
@@ -700,7 +714,7 @@ def render_ai_report(pipeline):
     badge_color = "#2e7d32" if status == "completed" else "#b71c1c"
     html_parts.append(
         f'<div class="ai-status" style="background:{badge_color}">'
-        f'Pipeline: {escape(status.upper())} — stopped after: {escape(stopped_after)}'
+        f'Pipeline: {escape(status.upper())} - stopped after: {escape(stopped_after)}'
         f'</div>'
     )
 
@@ -716,7 +730,7 @@ def render_ai_report(pipeline):
         decision_color = "#2e7d32" if decision == "YES" else "#e65100"
         html_parts.append(f'''
         <div class="ai-section">
-          <div class="ai-section-title">&#x1F9E0; Lifestyle Triage</div>
+          <div class="ai-section-title">Lifestyle Triage</div>
           <div class="ai-decision" style="border-left-color:{decision_color}">
             <strong>Decision:</strong> {escape(decision)} &nbsp;|&nbsp;
             <strong>Confidence:</strong> {escape(confidence)}<br>
@@ -729,7 +743,7 @@ def render_ai_report(pipeline):
     if stopped_after == "lifestyle_agent":
         return "\n".join(html_parts)
 
-    # Purpose: render medication checks, RAG sources, and Gemini clinical memo.
+    # Purpose: render medication checks, RAG sources, and CrewAI clinical memo.
     clinical = pipeline.get("clinical_agent", {})
     ca_report = clinical.get("clinical_agent", {}).get("report", {}) if clinical else {}
     med_checks = clinical.get("medication_checks", {}) if clinical else {}
@@ -740,7 +754,7 @@ def render_ai_report(pipeline):
         conf_color = {"high": "#2e7d32", "moderate": "#e65100", "low": "#b71c1c"}.get(confidence, "#555")
         html_parts.append(f'''
         <div class="ai-section">
-          <div class="ai-section-title">&#x1F3E5; Clinical Agent — Gemini</div>
+          <div class="ai-section-title">Clinical Agent - CrewAI</div>
           <div class="ai-summary-box">
             <p>{escape(ca_report.get("clinical_summary", ""))}</p>
             <span class="ai-badge" style="background:{conf_color}">Confidence: {escape(confidence)}</span>
@@ -758,7 +772,7 @@ def render_ai_report(pipeline):
           {render_list("Limitations", ca_report.get("limitations", []))}
         </div>''')
 
-    # Purpose: render PubMed/Gemini research synthesis.
+    # Purpose: render PubMed/CrewAI research synthesis.
     research = pipeline.get("research_agent", {})
     ra_report = research.get("report", {}) if research else {}
 
@@ -767,7 +781,7 @@ def render_ai_report(pipeline):
         pubmed_error = research.get("pubmed_error")
         html_parts.append(f'''
         <div class="ai-section">
-          <div class="ai-section-title">&#x1F4DA; Research Agent — PubMed + Gemini</div>
+          <div class="ai-section-title">Research Agent - PubMed + CrewAI</div>
           <div class="ai-summary-box">
             <p>{escape(ra_report.get("research_summary", ""))}</p>
           </div>
@@ -780,7 +794,49 @@ def render_ai_report(pipeline):
           {render_list("Limitations", ra_report.get("limitations", []))}
         </div>''')
 
+    # Purpose: render CrewAI evidence quality control after research synthesis.
+    evidence_review = pipeline.get("evidence_reviewer_agent", {})
+    er_report = evidence_review.get("report", {}) if evidence_review else {}
+
+    if er_report:
+        quality = str(er_report.get("overall_evidence_quality") or "not stated")
+        readiness = str(er_report.get("final_report_readiness") or "not stated")
+        html_parts.append(f'''
+        <div class="ai-section">
+          <div class="ai-section-title">Evidence Reviewer Agent - CrewAI</div>
+          <div class="ai-summary-box">
+            <p>{escape(er_report.get("reviewer_summary", ""))}</p>
+            <span class="ai-badge" style="background:#1f4e79">Quality: {escape(quality)}</span>
+            <span class="ai-badge" style="background:#607d8b">Readiness: {escape(readiness)}</span>
+          </div>
+          {render_list("High Confidence Claims", format_evidence_claims(er_report.get("high_confidence_claims", [])))}
+          {render_list("Moderate Confidence Claims", format_evidence_claims(er_report.get("moderate_confidence_claims", [])), warn=True)}
+          {render_list("Low Confidence or Unsupported Claims", format_evidence_claims(er_report.get("low_confidence_or_unsupported_claims", [])), danger=True)}
+          {render_list("Citation Quality Issues", er_report.get("citation_quality_issues", []), warn=True)}
+          {render_list("Missing Evidence", er_report.get("missing_evidence", []), warn=True)}
+          {render_list("Overstatement Risks", er_report.get("overstatement_risks", []), warn=True)}
+          {render_list("Evidence Conflicts", er_report.get("evidence_conflicts", []), warn=True)}
+          {render_list("Clinician Review Priorities", er_report.get("clinician_review_priorities", []))}
+          {render_list("Limitations", er_report.get("limitations", []))}
+        </div>''')
+
     return "\n".join(html_parts)
+
+
+def format_evidence_claims(items):
+    """Convert evidence reviewer claim dictionaries into readable list rows."""
+    rows = []
+    for item in items or []:
+        if not isinstance(item, dict):
+            rows.append(str(item))
+            continue
+        parts = [
+            item.get("claim"),
+            item.get("support"),
+            item.get("quality_reason") or item.get("quality_issue"),
+        ]
+        rows.append(" | ".join(str(part) for part in parts if part))
+    return rows
 
 
 def render_list(title, items, warn=False, danger=False):
@@ -793,7 +849,7 @@ def render_list(title, items, warn=False, danger=False):
 
 def render_flags(flags):
     if not flags:
-        return '<div class="ai-ok">&#x2705; No medication interaction flags detected.</div>'
+        return '<div class="ai-ok">No medication interaction flags detected.</div>'
     items = "".join(
         f'<div class="ai-flag"><strong>{escape(f.get("drug",""))}</strong>: {escape(f.get("message",""))}</div>'
         for f in flags
@@ -943,7 +999,7 @@ def submissions():
                 </details>
 
                 <div class="ai-report">
-                  <div class="ai-report-title">&#x1F916; AI Clinical Report</div>
+                  <div class="ai-report-title">AI Clinical Report</div>
                   {ai_html}
                 </div>
               </article>
@@ -964,7 +1020,7 @@ def submissions():
   <main>
     <div class="toolbar">
       <h1>Submitted Forms</h1>
-      <a href="/">&#x2190; Back to form</a>
+      <a href="/">Back to form</a>
     </div>
     {submissions_html}
   </main>
@@ -1215,7 +1271,7 @@ def clinical_agent_test_page():
 
       result.innerHTML = `
         <div class="section">
-          <h2>Gemini Clinical Agent Review</h2>
+          <h2>CrewAI Clinical Agent Review</h2>
           <p>${escapeHtml(report.clinical_summary || payload.message || "Clinical agent response received.")}</p>
           <p class="muted">Engine: ${escapeHtml(agent.engine || "gemini")} | Model: ${escapeHtml(agent.model || "")} | Confidence: ${escapeHtml(report.confidence || "not stated")}</p>
           ${agent.error ? `<div class="flag">${escapeHtml(agent.error)}</div>` : ""}
@@ -1225,15 +1281,15 @@ def clinical_agent_test_page():
           ${flagHtml}
         </div>
         <div class="section">
-          <h3>Gemini Key Findings</h3>
+          <h3>CrewAI Key Findings</h3>
           ${listItems(report.key_findings || [], "No key findings returned.")}
         </div>
         <div class="section">
-          <h3>Gemini Medication Safety</h3>
+          <h3>CrewAI Medication Safety</h3>
           ${listItems(report.medication_safety || [], "No medication-safety summary returned.")}
         </div>
         <div class="section">
-          <h3>Gemini Guideline Context</h3>
+          <h3>CrewAI Guideline Context</h3>
           ${listItems(report.guideline_context || [], "No guideline-context summary returned.")}
         </div>
         <div class="section">

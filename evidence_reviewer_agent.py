@@ -1,6 +1,7 @@
 import json
 
-from agent_utils import call_gemini_json, compact_text
+from agent_utils import compact_text
+from crewai_agent_tools import run_crewai_json_agent
 
 
 GEMINI_EVIDENCE_REVIEWER_MODEL = "gemini-2.5-flash"
@@ -70,6 +71,7 @@ Rules:
 - Flag claims that rely on incomplete patient data.
 - Flag claims that use citations which do not directly support the claim.
 - If PubMed returned no papers, include that in limitations or missing evidence.
+- If a PMID is cited but does not appear in the supplied pubmed_papers list, flag it as a citation quality issue.
 - Do not use Markdown, bold markers, bullets, headings, or asterisks inside string values. Use plain text only.
 """.strip()
 
@@ -172,18 +174,21 @@ def build_evidence_review_packet(research_result):
 
 
 def call_gemini_evidence_reviewer(review_packet, *, api_key, model_name=GEMINI_EVIDENCE_REVIEWER_MODEL, timeout=60):
-    """Ask Gemini to grade the supplied evidence and parse the JSON review."""
-    return call_gemini_json(
-        api_key=api_key,
-        model_name=model_name,
-        system_prompt=EVIDENCE_REVIEWER_SYSTEM_PROMPT,
-        prompt=(
+    """Run the CrewAI evidence quality reviewer and parse the JSON review."""
+    return run_crewai_json_agent(
+        role="Evidence Quality Reviewer Agent",
+        goal="Grade supplied claims against supplied evidence and flag support, citation, and overstatement risks.",
+        backstory=EVIDENCE_REVIEWER_SYSTEM_PROMPT,
+        task_prompt=(
             "Review this research result and judge the quality of its supplied evidence.\n\n"
             f"{json.dumps(review_packet, ensure_ascii=False, indent=2)}"
         ),
+        expected_output="A valid JSON object matching the requested evidence quality review response format.",
+        api_key=api_key,
+        model_name=model_name,
         max_tokens=8192,
         timeout=timeout,
-        label="Gemini evidence reviewer",
+        label="CrewAI evidence reviewer",
     )
 
 
@@ -216,7 +221,7 @@ def run_evidence_reviewer_agent(research_result, *, api_key, model_name=GEMINI_E
         llm_error = str(exc)
 
     return {
-        "engine": "gemini",
+        "engine": "crewai",
         "model": model_name,
         "review_packet": review_packet,
         "report": report,

@@ -1,6 +1,6 @@
 import json
 
-from agent_utils import call_gemini_json
+from crewai_agent_tools import run_crewai_json_agent
 
 
 # Purpose: tell Gemini exactly what structured clinical memo to return.
@@ -78,18 +78,21 @@ def build_evidence_packet(inputs, rag_context, medication_checks):
 
 
 def call_gemini_clinical_agent(evidence_packet, *, api_key, model_name, timeout=45):
-    """Send the evidence packet to Gemini and parse the JSON memo."""
-    return call_gemini_json(
-        api_key=api_key,
-        model_name=model_name,
-        system_prompt=CLINICAL_AGENT_SYSTEM_PROMPT,
-        prompt=(
+    """Run the CrewAI clinical review agent and parse the JSON memo."""
+    return run_crewai_json_agent(
+        role="Clinical Evidence Review Agent",
+        goal="Produce a clinician-facing structured memo using only the supplied evidence packet.",
+        backstory=CLINICAL_AGENT_SYSTEM_PROMPT,
+        task_prompt=(
             "Review this evidence packet and produce the required JSON clinical research memo.\n\n"
             f"{json.dumps(evidence_packet, ensure_ascii=False, indent=2)}"
         ),
+        expected_output="A valid JSON object matching the requested clinical memo response format.",
+        api_key=api_key,
+        model_name=model_name,
         max_tokens=8192,
         timeout=timeout,
-        label="Gemini clinical agent",
+        label="CrewAI clinical agent",
     )
 
 
@@ -266,7 +269,7 @@ def build_clinical_agent_response(data, dependencies):
         llm_error = None
     except RuntimeError as exc:
         llm_report = {
-            "clinical_summary": "Gemini clinical reasoning was unavailable. Evidence packet was still assembled.",
+            "clinical_summary": "CrewAI clinical reasoning was unavailable. Evidence packet was still assembled.",
             "key_findings": [],
             "medication_safety": [],
             "guideline_context": [],
@@ -280,19 +283,19 @@ def build_clinical_agent_response(data, dependencies):
         llm_error = str(exc)
 
     return {
-        "message": "Gemini clinical agent packet created for clinician review.",
+        "message": "CrewAI clinical agent packet created for clinician review.",
         "input": inputs,
         "rag": rag_context,
         "medication_checks": medication_checks,
         "evidence_packet": evidence_packet,
         "clinical_agent": {
-            "engine": "gemini",
+            "engine": "crewai",
             "model": dependencies.get("gemini_clinical_model", "gemini-2.5-flash"),
             "report": llm_report,
             "error": llm_error,
         },
         "notes": [
-            "Gemini reviewed the assembled RAG and medication evidence packet.",
+            "CrewAI reviewed the assembled RAG and medication evidence packet.",
             "Use retrieved source passages and citations to verify guideline support.",
             "Confirm medication names, doses, allergies, contraindications, and interactions with a licensed clinician.",
             "openFDA and DrugBank results may be incomplete; absence of a flag is not proof of safety.",
