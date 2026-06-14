@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import shutil
 import textwrap
 from datetime import datetime
 
@@ -781,6 +782,7 @@ def save_report_pdf(report, *, upload_dir, submission_id=None, patient_name=None
     fallback_id = str(submission_id or "unsaved")
     safe_code = re.sub(r"[^A-Za-z0-9_-]+", "-", str(code_no or "").strip()).strip("-")
     safe_id = re.sub(r"[^A-Za-z0-9_-]+", "-", fallback_id).strip("-")
+    safe_patient_name = re.sub(r"[^A-Za-z0-9_-]+", "-", str(patient_name or "").strip()).strip("-")
     if safe_code:
         filename_base = f"clinical-report-{safe_code}"
     else:
@@ -795,6 +797,21 @@ def save_report_pdf(report, *, upload_dir, submission_id=None, patient_name=None
         write_arabic_pdf(report or {}, absolute_path, font_paths=(font_status["regular"], font_status["bold"]))
     else:
         write_simple_pdf(_report_lines(report or {}), absolute_path)
+
+    legacy_filename = ""
+    if safe_patient_name and safe_code:
+        legacy_filename = f"{safe_patient_name}-({safe_code}).pdf"
+    elif safe_code:
+        legacy_filename = f"clinical-report-({safe_code}).pdf"
+    elif safe_patient_name:
+        legacy_filename = f"{safe_patient_name}.pdf"
+
+    if legacy_filename and legacy_filename != filename:
+        legacy_relative_path = os.path.join("reports", date_folder, legacy_filename)
+        legacy_absolute_path = os.path.join(upload_dir, legacy_relative_path)
+        os.makedirs(os.path.dirname(legacy_absolute_path), exist_ok=True)
+        shutil.copyfile(absolute_path, legacy_absolute_path)
+
     return {
         "relative_path": relative_path.replace(os.sep, "/"),
         "url": f"/uploads/{relative_path.replace(os.sep, '/')}",

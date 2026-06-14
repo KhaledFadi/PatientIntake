@@ -1,8 +1,10 @@
 from flask import Flask, request, jsonify, render_template, send_from_directory, Response
 from flask_cors import CORS
 import json
+import glob
 import os
 import queue
+import re
 import threading
 import time
 
@@ -278,7 +280,32 @@ def uploaded_file(filename):
         return password_required_response()
 
     directory = os.path.join(UPLOAD_DIR, os.path.dirname(normalized))
-    response = send_from_directory(directory, os.path.basename(normalized))
+    basename = os.path.basename(normalized)
+    full_path = os.path.join(directory, basename)
+
+    if not os.path.exists(full_path) and is_report_pdf:
+        report_match = re.search(r"INT-[A-Za-z0-9_-]+", basename, re.IGNORECASE)
+        if report_match:
+            code_token = report_match.group(0)
+            patterns = [
+                f"*{code_token}*.pdf",
+                f"*({code_token}).pdf",
+                f"*-{code_token}.pdf",
+            ]
+            for pattern in patterns:
+                matches = sorted(
+                    glob.glob(os.path.join(UPLOAD_DIR, "reports", "**", pattern), recursive=True)
+                )
+                if matches:
+                    directory = os.path.dirname(matches[0])
+                    basename = os.path.basename(matches[0])
+                    full_path = matches[0]
+                    break
+
+    if not os.path.exists(full_path):
+        return Response("Report PDF not found.", 404)
+
+    response = send_from_directory(directory, basename)
     if is_report_pdf:
         response.headers["Cache-Control"] = "no-store, max-age=0"
     return response
