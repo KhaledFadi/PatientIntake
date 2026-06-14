@@ -173,6 +173,44 @@ def _public_upload_url(relative_path):
     if _APP_BASE_PATH:
         return f"{_APP_BASE_PATH}/uploads/{relative_path}"
     return f"/uploads/{relative_path}"
+
+
+def _resolve_report_pdf_url(report_pdf, code_no):
+    """Return a report PDF URL only when a real file exists on disk."""
+    report_pdf = report_pdf or {}
+    candidate_paths = []
+
+    relative_path = str(report_pdf.get("relative_path") or "").strip().replace("\\", "/").lstrip("/")
+    if relative_path:
+        candidate_paths.append(relative_path)
+
+    url = str(report_pdf.get("url") or "").strip()
+    if url.startswith("/uploads/"):
+        candidate_paths.append(url.removeprefix("/uploads/"))
+    if _APP_BASE_PATH and url.startswith(f"{_APP_BASE_PATH}/uploads/"):
+        candidate_paths.append(url.removeprefix(f"{_APP_BASE_PATH}/uploads/"))
+
+    for relative in candidate_paths:
+        full_path = os.path.join(UPLOAD_DIR, relative)
+        if os.path.exists(full_path):
+            return _public_upload_url(relative)
+
+    code_token = str(code_no or "").strip()
+    if not code_token:
+        return None
+
+    patterns = [
+        f"*{code_token}*.pdf",
+        f"*({code_token}).pdf",
+        f"*-{code_token}.pdf",
+    ]
+    for pattern in patterns:
+        matches = sorted(glob.glob(os.path.join(UPLOAD_DIR, "reports", "**", pattern), recursive=True))
+        if matches:
+            relative = os.path.relpath(matches[0], UPLOAD_DIR).replace("\\", "/")
+            return _public_upload_url(relative)
+
+    return None
 CORS(app)
 app.config["MAX_CONTENT_LENGTH"] = 30 * 1024 * 1024
 
@@ -489,14 +527,7 @@ def submissions():
         uploaded_files = form_data.pop("uploadedFiles", None)
         submission_id = row["id"]
         code_no = f"INT-{submission_id}"
-        report_pdf_url = report_pdf.get("url") or ""
-        report_pdf_relative = report_pdf.get("relative_path") or f"reports/{code_no}.pdf"
-        expected_prefix = f"{_APP_BASE_PATH}/" if _APP_BASE_PATH else ""
-        if (
-            not str(report_pdf_url).lower().endswith(".pdf")
-            or (expected_prefix and not str(report_pdf_url).startswith(expected_prefix))
-        ):
-            report_pdf_url = _public_upload_url(report_pdf_relative)
+        report_pdf_url = _resolve_report_pdf_url(report_pdf, code_no)
         submissions.append({
             "id": submission_id,
             "full_name": row["full_name"] or "",
