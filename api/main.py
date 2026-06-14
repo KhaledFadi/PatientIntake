@@ -480,13 +480,17 @@ def submissions():
         report_pdf = (pipeline or {}).get("report_pdf") or {}
         uploaded_files = form_data.pop("uploadedFiles", None)
         submission_id = row["id"]
+        code_no = f"INT-{submission_id}"
+        report_pdf_url = report_pdf.get("url") or ""
+        if not str(report_pdf_url).lower().endswith(".pdf"):
+            report_pdf_url = f"/uploads/reports/{code_no}.pdf"
         submissions.append({
             "id": submission_id,
             "full_name": row["full_name"] or "",
             "age": row["age"] or "",
             "mobile": row["mobile"] or "",
             "email": row["email"] or "",
-            "code_no": f"INT-{submission_id}",
+            "code_no": code_no,
             "form_panel_id": f"form-panel-{submission_id}",
             "ai_panel_id": f"ai-panel-{submission_id}",
             "ai_summary_panel_id": f"ai-summary-panel-{submission_id}",
@@ -495,7 +499,7 @@ def submissions():
             "pedt_panel_id": f"pedt-panel-{submission_id}",
             "ehs_panel_id": f"ehs-panel-{submission_id}",
             "low_libido_panel_id": f"low-libido-panel-{submission_id}",
-            "report_pdf_url": report_pdf.get("url"),
+            "report_pdf_url": report_pdf_url,
             "report_pdf_error": report_pdf.get("error"),
             "uploaded_files": uploaded_files,
             "ai_summary_points": build_ai_summary_points(pipeline),
