@@ -396,7 +396,7 @@ def scan_drugs():
         "notes": notes,
         "deployment": deployment_info(),
     })
-
+ 
 
 @app.route("/submissions")
 def submissions():
