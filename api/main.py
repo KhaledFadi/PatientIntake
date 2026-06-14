@@ -269,16 +269,17 @@ def clinical_agent_test_js():
 @app.route("/uploads/<path:filename>")
 def uploaded_file(filename):
     """Serve a protected uploaded file after validating the requested path is safe."""
-    if not submissions_authorized():
-        return password_required_response()
-
     normalized = os.path.normpath(filename)
     if normalized.startswith("..") or os.path.isabs(normalized):
         return Response("Invalid upload path.", 400)
 
+    is_report_pdf = normalized.replace("\\", "/").startswith("reports/")
+    if not is_report_pdf and not submissions_authorized():
+        return password_required_response()
+
     directory = os.path.join(UPLOAD_DIR, os.path.dirname(normalized))
     response = send_from_directory(directory, os.path.basename(normalized))
-    if normalized.replace("\\", "/").startswith("reports/"):
+    if is_report_pdf:
         response.headers["Cache-Control"] = "no-store, max-age=0"
     return response
 
