@@ -8,6 +8,7 @@ from core.agent_utils import compact_text
 from tools.crewai_agent_tools import run_crewai_json_agent
 
 
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GEMINI_REPORT_MODEL = "gemini-2.5-flash"
 
 
@@ -602,16 +603,41 @@ def _load_arabic_pdf_libs():
 
 
 def _arabic_font_paths():
-    """Return regular/bold Arabic-capable font paths available on Windows."""
-    candidates = [
+    """Return regular/bold Arabic-capable font paths for Windows or Linux hosts."""
+    fonts_dir = os.environ.get("ARABIC_PDF_FONTS_DIR")
+    candidates = []
+
+    local_fonts_dir = os.path.join(BASE_DIR, "fonts")
+    candidate_dirs = [d for d in (fonts_dir, local_fonts_dir) if d]
+
+    for base_dir in candidate_dirs:
+        candidates.extend([
+            (os.path.join(base_dir, "Arabic-Regular.ttf"), os.path.join(base_dir, "Arabic-Bold.ttf")),
+            (os.path.join(base_dir, "NotoNaskhArabic-Regular.ttf"), os.path.join(base_dir, "NotoNaskhArabic-Bold.ttf")),
+            (os.path.join(base_dir, "NotoSansArabic-Regular.ttf"), os.path.join(base_dir, "NotoSansArabic-Bold.ttf")),
+            (os.path.join(base_dir, "Amiri-Regular.ttf"), os.path.join(base_dir, "Amiri-Bold.ttf")),
+            (os.path.join(base_dir, "DejaVuSans.ttf"), os.path.join(base_dir, "DejaVuSans-Bold.ttf")),
+            (os.path.join(base_dir, "LiberationSans-Regular.ttf"), os.path.join(base_dir, "LiberationSans-Bold.ttf")),
+        ])
+
+    candidates.extend([
         (r"C:\Windows\Fonts\arial.ttf", r"C:\Windows\Fonts\arialbd.ttf"),
         (r"C:\Windows\Fonts\tahoma.ttf", r"C:\Windows\Fonts\tahomabd.ttf"),
         (r"C:\Windows\Fonts\segoeui.ttf", r"C:\Windows\Fonts\segoeuib.ttf"),
-    ]
+        ("/usr/share/fonts/truetype/noto/NotoNaskhArabic-Regular.ttf", "/usr/share/fonts/truetype/noto/NotoNaskhArabic-Bold.ttf"),
+        ("/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf", "/usr/share/fonts/truetype/noto/NotoSansArabic-Bold.ttf"),
+        ("/usr/share/fonts/truetype/amiri/Amiri-Regular.ttf", "/usr/share/fonts/truetype/amiri/Amiri-Bold.ttf"),
+        ("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"),
+        ("/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf", "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf"),
+    ])
+
     for regular, bold in candidates:
         if os.path.exists(regular) and os.path.exists(bold):
             return regular, bold
-    raise RuntimeError("No Arabic-capable Windows font was found.")
+    raise RuntimeError(
+        "No Arabic-capable font was found. Set ARABIC_PDF_FONTS_DIR or install "
+        "Noto Naskh Arabic, Amiri, DejaVu Sans, or Liberation Sans."
+    )
 
 
 def _shape_arabic(text, arabic_reshaper, get_display):
