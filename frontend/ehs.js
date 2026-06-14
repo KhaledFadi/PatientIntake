@@ -25,7 +25,7 @@
     }
 
     if (!complaints.includes("erectile_dysfunction")) {
-        window.location.replace("/");
+        window.location.replace("./");
         return;
     }
 
@@ -245,7 +245,7 @@
             document.getElementById("step-2").style.display = "none";
             showCompletionCard(
                 "This is your code. Please remember it for future visits.",
-                "/",
+                "./",
                 "Finish / إنهاء"
             );
             return;
@@ -258,7 +258,7 @@
 
             const continueBtn = document.getElementById("continueBtn");
             if (continueBtn) {
-                continueBtn.href = "/";
+                continueBtn.href = "./";
                 continueBtn.textContent = "Finish / إنهاء";
             }
 

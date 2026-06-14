@@ -23,14 +23,14 @@
     }
 
     function resolveNextPage(updatedComplaints) {
-        if (updatedComplaints.includes('erectile_dysfunction')) return '/ehs';
-        return '/';
+        if (updatedComplaints.includes('erectile_dysfunction')) return 'ehs';
+        return './';
     }
 
     if (!complaints.includes('premature_ejaculation')) {
         const nextPage = resolveNextPage(complaints);
         if (nextPage !== window.location.pathname) {
-            window.location.replace(`${nextPage}${nextPage === '/' ? '' : buildForwardQuery(complaints)}`);
+            window.location.replace(`${nextPage}${nextPage === './' ? '' : buildForwardQuery(complaints)}`);
         }
         return;
     }
@@ -370,7 +370,7 @@
 
             showCompletionCard(
                 "This is your code. Please remember it for future visits.",
-                "/",
+                "./",
                 "Finish / إنهاء"
             );
             return;
